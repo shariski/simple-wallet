@@ -22,6 +22,28 @@ func NewWalletHandler(s *service.WalletService, v *validator.Validate) *WalletHa
 	}
 }
 
+func (h *WalletHandler) Create(w http.ResponseWriter, r *http.Request) {
+	req := new(model.CreateWalletRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.Validate.Struct(req); err != nil {
+		http.Error(w, "validation error", http.StatusBadRequest)
+		return
+	}
+
+	res, err := h.Service.Create(r.Context(), req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(res)
+}
+
 func (h *WalletHandler) TopUp(w http.ResponseWriter, r *http.Request) {
 	paramID := r.PathValue("id")
 	walletID, err := uuid.Parse(paramID)
@@ -50,4 +72,119 @@ func (h *WalletHandler) TopUp(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"status":"success"}`))
+}
+
+func (h *WalletHandler) Payment(w http.ResponseWriter, r *http.Request) {
+	paramID := r.PathValue("id")
+	walletID, err := uuid.Parse(paramID)
+	if err != nil {
+		http.Error(w, "invalid wallet id", http.StatusBadRequest)
+		return
+	}
+
+	req := new(model.PaymentWalletRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	req.ID = walletID
+
+	if err := h.Validate.Struct(req); err != nil {
+		http.Error(w, "validation error", http.StatusBadRequest)
+		return
+	}
+
+	res, err := h.Service.Payment(r.Context(), req)
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Add("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(res)
+}
+
+func (h *WalletHandler) Transfer(w http.ResponseWriter, r *http.Request) {
+	req := new(model.TransferWalletRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.Validate.Struct(req); err != nil {
+		http.Error(w, "validation error", http.StatusBadRequest)
+		return
+	}
+
+	// TODO: fix json response, how to make one json for two res
+	sender, receiver, err := h.Service.Transfer(r.Context(), req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	res := []*model.WalletResponse{sender, receiver}
+
+	w.Header().Add("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(res)
+}
+
+func (h *WalletHandler) Suspend(w http.ResponseWriter, r *http.Request) {
+	paramID := r.PathValue("id")
+	walletID, err := uuid.Parse(paramID)
+	if err != nil {
+		http.Error(w, "invalid wallet id", http.StatusBadRequest)
+		return
+	}
+
+	req := new(model.SuspendWalletRequest)
+	req.ID = walletID
+
+	if err := h.Validate.Struct(req); err != nil {
+		http.Error(w, "validation error", http.StatusBadRequest)
+		return
+	}
+
+	res, err := h.Service.Suspend(r.Context(), req)
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Add("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(res)
+}
+
+func (h *WalletHandler) Status(w http.ResponseWriter, r *http.Request) {
+	paramID := r.PathValue("id")
+	walletID, err := uuid.Parse(paramID)
+	if err != nil {
+		http.Error(w, "invalid wallet id", http.StatusBadRequest)
+		return
+	}
+
+	req := new(model.StatusWalletRequest)
+	req.ID = walletID
+
+	if err := h.Validate.Struct(req); err != nil {
+		http.Error(w, "validation error", http.StatusBadRequest)
+		return
+	}
+
+	res, err := h.Service.Status(r.Context(), req)
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Add("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(res)
 }

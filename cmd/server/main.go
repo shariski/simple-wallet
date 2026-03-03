@@ -30,12 +30,12 @@ func main() {
 	walletHandler := handler.NewWalletHandler(walletService, validator)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /wallets", homeHandler)
+	mux.HandleFunc("POST /wallets", walletHandler.Create)
 	mux.HandleFunc("POST /wallets/{id}/topup", walletHandler.TopUp)
-	mux.HandleFunc("POST /wallets/{id}/pay", healthHandler)
-	mux.HandleFunc("POST /wallets/transfer", healthHandler)
-	mux.HandleFunc("POST /wallets/{id}/suspend", healthHandler)
-	mux.HandleFunc("GET /wallets/{id}", healthHandler)
+	mux.HandleFunc("POST /wallets/{id}/pay", walletHandler.Payment)
+	mux.HandleFunc("POST /wallets/transfer", walletHandler.Transfer)
+	mux.HandleFunc("POST /wallets/{id}/suspend", walletHandler.Suspend)
+	mux.HandleFunc("GET /wallets/{id}", walletHandler.Status)
 
 	port := ":8080"
 	fmt.Println("Server running on port" + port)
@@ -43,15 +43,4 @@ func main() {
 	if err := http.ListenAndServe(port, mux); err != nil {
 		log.Fatal(err)
 	}
-}
-
-func homeHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `{"message":"Hello World!"}`)
-}
-
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "ok")
 }
