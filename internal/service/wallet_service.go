@@ -35,7 +35,7 @@ func NormalizeAmount(input string) (decimal.Decimal, error) {
 		return decimal.Zero, errors.New("amount must be > 0")
 	}
 
-	if amount.LessThan(decimal.NewFromFloat(0.01)) {
+	if amount.LessThan(decimal.RequireFromString("0.01")) {
 		return decimal.Zero, errors.New("below minimum unit")
 	}
 
@@ -303,8 +303,10 @@ func (s *WalletService) Transfer(ctx context.Context, req *model.TransferWalletR
 }
 
 func (s *WalletService) Suspend(ctx context.Context, req *model.SuspendWalletRequest) (*model.WalletResponse, error) {
+	var wallet entity.Wallet
 	result := s.db.WithContext(ctx).
-		Model(&entity.Wallet{}).
+		Clauses(clause.Returning{}).
+		Model(&wallet).
 		Where("id = ? AND status = ?", req.ID, "ACTIVE").
 		Update("status", "SUSPENDED")
 
@@ -314,12 +316,6 @@ func (s *WalletService) Suspend(ctx context.Context, req *model.SuspendWalletReq
 
 	if result.RowsAffected == 0 {
 		return nil, errors.New("wallet not found or already suspended")
-	}
-
-	var wallet entity.Wallet
-	if err := s.db.WithContext(ctx).
-		First(&wallet, "id = ?", req.ID).Error; err != nil {
-		return nil, err
 	}
 
 	return model.WalletToResponse(&wallet), nil
