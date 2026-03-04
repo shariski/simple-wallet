@@ -24,7 +24,7 @@ func NewWalletHandler(s *service.WalletService, v *validator.Validate) *WalletHa
 
 func (h *WalletHandler) Create(w http.ResponseWriter, r *http.Request) {
 	req := new(model.CreateWalletRequest)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -40,11 +40,18 @@ func (h *WalletHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(res)
 }
 
 func (h *WalletHandler) TopUp(w http.ResponseWriter, r *http.Request) {
+	idempotencyKey := r.Header.Get("X-Idempotency-Key")
+	if idempotencyKey == "" {
+		http.Error(w, "idempotency key not found in request", http.StatusBadRequest)
+		return
+	}
+
 	paramID := r.PathValue("id")
 	walletID, err := uuid.Parse(paramID)
 	if err != nil {
@@ -53,11 +60,12 @@ func (h *WalletHandler) TopUp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req := new(model.TopupWalletRequest)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
+	req.IdempotencyKey = idempotencyKey
 	req.ID = walletID
 
 	if err := h.Validate.Struct(req); err != nil {
@@ -70,11 +78,18 @@ func (h *WalletHandler) TopUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"status":"success"}`))
 }
 
 func (h *WalletHandler) Payment(w http.ResponseWriter, r *http.Request) {
+	idempotencyKey := r.Header.Get("X-Idempotency-Key")
+	if idempotencyKey == "" {
+		http.Error(w, "idempotency key not found in request", http.StatusBadRequest)
+		return
+	}
+
 	paramID := r.PathValue("id")
 	walletID, err := uuid.Parse(paramID)
 	if err != nil {
@@ -83,11 +98,12 @@ func (h *WalletHandler) Payment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req := new(model.PaymentWalletRequest)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
+	req.IdempotencyKey = idempotencyKey
 	req.ID = walletID
 
 	if err := h.Validate.Struct(req); err != nil {
@@ -102,24 +118,31 @@ func (h *WalletHandler) Payment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Add("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(res)
 }
 
 func (h *WalletHandler) Transfer(w http.ResponseWriter, r *http.Request) {
+	idempotencyKey := r.Header.Get("X-Idempotency-Key")
+	if idempotencyKey == "" {
+		http.Error(w, "idempotency key not found in request", http.StatusBadRequest)
+		return
+	}
+
 	req := new(model.TransferWalletRequest)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
+
+	req.IdempotencyKey = idempotencyKey
 
 	if err := h.Validate.Struct(req); err != nil {
 		http.Error(w, "validation error", http.StatusBadRequest)
 		return
 	}
 
-	// TODO: fix json response, how to make one json for two res
 	sender, receiver, err := h.Service.Transfer(r.Context(), req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -128,7 +151,7 @@ func (h *WalletHandler) Transfer(w http.ResponseWriter, r *http.Request) {
 
 	res := []*model.WalletResponse{sender, receiver}
 
-	w.Header().Add("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(res)
 }
@@ -156,7 +179,7 @@ func (h *WalletHandler) Suspend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Add("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(res)
 }
@@ -184,7 +207,7 @@ func (h *WalletHandler) Status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Add("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(res)
 }

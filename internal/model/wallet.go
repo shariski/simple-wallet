@@ -24,20 +24,23 @@ type CreateWalletRequest struct {
 }
 
 type TopupWalletRequest struct {
-	ID       uuid.UUID `validate:"uuid,required"`
-	OwnerID  string    `json:"owner_id" validate:"required,min=3,max=20"`
-	Currency string    `json:"currency" validate:"required,len=3"`
-	Amount   string    `json:"amount" validate:"required"`
+	IdempotencyKey string    `validate:"min=3,max=100"`
+	ID             uuid.UUID `validate:"uuid,required"`
+	OwnerID        string    `json:"owner_id" validate:"required,min=3,max=20"`
+	Currency       string    `json:"currency" validate:"required,len=3"`
+	Amount         string    `json:"amount" validate:"required"`
 }
 
 type PaymentWalletRequest struct {
-	ID       uuid.UUID `json:"id" validate:"uuid,required"`
-	OwnerID  string    `json:"owner_id" validate:"required,min=3,max=20"`
-	Currency string    `json:"currency" validate:"required,len=3"`
-	Amount   string    `json:"amount" validate:"required"`
+	IdempotencyKey string    `validate:"min=3,max=100"`
+	ID             uuid.UUID `json:"id" validate:"uuid,required"`
+	OwnerID        string    `json:"owner_id" validate:"required,min=3,max=20"`
+	Currency       string    `json:"currency" validate:"required,len=3"`
+	Amount         string    `json:"amount" validate:"required"`
 }
 
 type TransferWalletRequest struct {
+	IdempotencyKey   string `validate:"min=3,max=100"`
 	SenderID         string `json:"sender_id" validate:"required,min=3,max=20"`
 	ReceiverID       string `json:"receiver_id" validate:"required,min=3,max=20"`
 	SenderCurrency   string `json:"sender_currency" validate:"required,len=3"`

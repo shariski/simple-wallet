@@ -22,6 +22,8 @@ func main() {
 
 	err = database.AutoMigrate(
 		&entity.Wallet{},
+		&entity.LedgerEntry{},
+		&entity.IdempotencyKey{},
 	)
 
 	validator := util.NewValidator()

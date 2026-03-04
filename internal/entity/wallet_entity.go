@@ -16,3 +16,7 @@ type Wallet struct {
 	CreatedAt time.Time       `gorm:"column:created_at;autoCreateTime;->;<-:create"`
 	UpdatedAt time.Time       `gorm:"column:updated_at;autoCreateTime;autoUpdateTime"`
 }
+
+func (w *Wallet) TableName() string {
+	return "wallets"
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/shariski/simple-wallet/internal/entity"
 	"github.com/shariski/simple-wallet/internal/model"
@@ -22,7 +23,7 @@ func NewWalletService(db *gorm.DB) *WalletService {
 	}
 }
 
-func normalizeAmount(input string) (decimal.Decimal, error) {
+func NormalizeAmount(input string) (decimal.Decimal, error) {
 	amount, err := decimal.NewFromString(input)
 	if err != nil {
 		return decimal.Zero, errors.New("invalid amount format")
@@ -63,13 +64,28 @@ func (s *WalletService) Create(ctx context.Context, req *model.CreateWalletReque
 }
 
 func (s *WalletService) TopUp(ctx context.Context, req *model.TopupWalletRequest) error {
-	amount, err := normalizeAmount(req.Amount)
+	amount, err := NormalizeAmount(req.Amount)
 	if err != nil {
 		return err
 	}
 
 	tx := s.db.WithContext(ctx).Begin()
 	defer tx.Rollback()
+
+	idempotencyResult := tx.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "key"}},
+		DoNothing: true,
+	}).Create(&entity.IdempotencyKey{
+		Key: req.IdempotencyKey,
+	})
+
+	if idempotencyResult.Error != nil {
+		return idempotencyResult.Error
+	}
+
+	if idempotencyResult.RowsAffected == 0 {
+		return errors.New("duplicate request")
+	}
 
 	var wallet entity.Wallet
 
@@ -90,17 +106,16 @@ func (s *WalletService) TopUp(ctx context.Context, req *model.TopupWalletRequest
 		return err
 	}
 
-	// entry := model.LedgerEntry{
-	// 	ID:       uuid.New(),
-	// 	WalletID: wallet.ID,
-	// 	Amount:   amount,
-	// 	Currency: wallet.Currency,
-	// 	Type:     "TOPUP",
-	// }
+	entry := entity.LedgerEntry{
+		WalletID: wallet.ID,
+		Amount:   amount,
+		Currency: wallet.Currency,
+		Type:     "TOPUP",
+	}
 
-	// if err := tx.Create(&entry).Error; err != nil {
-	// 	return err
-	// }
+	if err := tx.Create(&entry).Error; err != nil {
+		return err
+	}
 
 	if err := tx.Commit().Error; err != nil {
 		return err
@@ -110,13 +125,28 @@ func (s *WalletService) TopUp(ctx context.Context, req *model.TopupWalletRequest
 }
 
 func (s *WalletService) Payment(ctx context.Context, req *model.PaymentWalletRequest) (*model.WalletResponse, error) {
-	amount, err := normalizeAmount(req.Amount)
+	amount, err := NormalizeAmount(req.Amount)
 	if err != nil {
 		return nil, err
 	}
 
 	tx := s.db.WithContext(ctx).Begin()
 	defer tx.Rollback()
+
+	idempotencyResult := tx.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "key"}},
+		DoNothing: true,
+	}).Create(&entity.IdempotencyKey{
+		Key: req.IdempotencyKey,
+	})
+
+	if idempotencyResult.Error != nil {
+		return nil, idempotencyResult.Error
+	}
+
+	if idempotencyResult.RowsAffected == 0 {
+		return nil, errors.New("duplicate request")
+	}
 
 	var wallet entity.Wallet
 
@@ -141,18 +171,17 @@ func (s *WalletService) Payment(ctx context.Context, req *model.PaymentWalletReq
 	if err := tx.Save(&wallet).Error; err != nil {
 		return nil, err
 	}
-	//
-	// ledger := entity.LedgerEntry{
-	// 	ID:       uuid.New(),
-	// 	WalletID: wallet.ID,
-	// 	Amount:   amount.Neg(),
-	// 	Currency: wallet.Currency,
-	// 	Type:     "PAYMENT",
-	// }
-	//
-	// if err := tx.Create(&ledger).Error; err != nil {
-	// 	return err
-	// }
+
+	ledger := entity.LedgerEntry{
+		WalletID: wallet.ID,
+		Amount:   amount.Neg(),
+		Currency: wallet.Currency,
+		Type:     "PAYMENT",
+	}
+
+	if err := tx.Create(&ledger).Error; err != nil {
+		return nil, err
+	}
 
 	if err := tx.Commit().Error; err != nil {
 		return nil, err
@@ -161,9 +190,13 @@ func (s *WalletService) Payment(ctx context.Context, req *model.PaymentWalletReq
 	return model.WalletToResponse(&wallet), nil
 }
 
-// TODO: fixed lock ordering not by identifier (wallet id) can cause deadlock
+// TODO: fixed lock ordering not by identifier (wallet id) can cause deadlock if cross transfers happen at the same time.
 func (s *WalletService) Transfer(ctx context.Context, req *model.TransferWalletRequest) (*model.WalletResponse, *model.WalletResponse, error) {
-	amount, err := normalizeAmount(req.Amount)
+	if req.SenderID == req.ReceiverID {
+		return nil, nil, errors.New("cannot self transfer")
+	}
+
+	amount, err := NormalizeAmount(req.Amount)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -173,6 +206,21 @@ func (s *WalletService) Transfer(ctx context.Context, req *model.TransferWalletR
 
 	tx := s.db.WithContext(ctx).Begin()
 	defer tx.Rollback()
+
+	idempotencyResult := tx.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "key"}},
+		DoNothing: true,
+	}).Create(&entity.IdempotencyKey{
+		Key: req.IdempotencyKey,
+	})
+
+	if idempotencyResult.Error != nil {
+		return nil, nil, idempotencyResult.Error
+	}
+
+	if idempotencyResult.RowsAffected == 0 {
+		return nil, nil, errors.New("duplicate request")
+	}
 
 	if err := tx.
 		Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -219,7 +267,31 @@ func (s *WalletService) Transfer(ctx context.Context, req *model.TransferWalletR
 		return nil, nil, err
 	}
 
-	// TODO: add to ledger entry
+	refID := uuid.New()
+
+	debitLedger := entity.LedgerEntry{
+		WalletID:    sender.ID,
+		Amount:      amount.Neg(),
+		Currency:    sender.Currency,
+		Type:        "TRANSFER_OUT",
+		ReferenceID: &refID,
+	}
+
+	creditLedger := entity.LedgerEntry{
+		WalletID:    receiver.ID,
+		Amount:      amount,
+		Currency:    receiver.Currency,
+		Type:        "TRANSFER_IN",
+		ReferenceID: &refID,
+	}
+
+	if err := tx.Create(&debitLedger).Error; err != nil {
+		return nil, nil, err
+	}
+
+	if err := tx.Create(&creditLedger).Error; err != nil {
+		return nil, nil, err
+	}
 
 	if err := tx.Commit().Error; err != nil {
 		return nil, nil, err
