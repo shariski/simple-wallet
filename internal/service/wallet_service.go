@@ -29,11 +29,11 @@ func NormalizeAmount(input string) (decimal.Decimal, error) {
 		return decimal.Zero, errors.New("invalid amount format")
 	}
 
-	amount = amount.Round(2)
-
 	if amount.LessThanOrEqual(decimal.Zero) {
 		return decimal.Zero, errors.New("amount must be > 0")
 	}
+
+	amount = amount.Round(2)
 
 	if amount.LessThan(decimal.RequireFromString("0.01")) {
 		return decimal.Zero, errors.New("below minimum unit")

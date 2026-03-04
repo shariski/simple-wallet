@@ -1139,3 +1139,133 @@ func TestPayment_OwnerMismatch(t *testing.T) {
 		t.Fatalf("wallet balance changed unexpectedly: %s", updated.Balance)
 	}
 }
+
+func TestTransfer_CrossConcurrent(t *testing.T) {
+	db, svc := setupTestDB(t)
+	ctx := context.Background()
+
+	a := entity.Wallet{
+		OwnerID:  "userA",
+		Currency: "USD",
+		Status:   "ACTIVE",
+		Balance:  decimal.NewFromInt(100),
+	}
+
+	b := entity.Wallet{
+		OwnerID:  "userB",
+		Currency: "USD",
+		Status:   "ACTIVE",
+		Balance:  decimal.NewFromInt(100),
+	}
+
+	if err := db.Create(&a).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.Create(&b).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+
+		_, _, err := svc.Transfer(ctx, &model.TransferWalletRequest{
+			SenderID:         "userA",
+			SenderCurrency:   "USD",
+			ReceiverID:       "userB",
+			ReceiverCurrency: "USD",
+			IdempotencyKey:   "cross-1",
+			Amount:           "10.00",
+		})
+
+		if err != nil {
+			t.Logf("transfer A->B error: %v", err)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+
+		_, _, err := svc.Transfer(ctx, &model.TransferWalletRequest{
+			SenderID:         "userB",
+			SenderCurrency:   "USD",
+			ReceiverID:       "userA",
+			ReceiverCurrency: "USD",
+			IdempotencyKey:   "cross-2",
+			Amount:           "20.00",
+		})
+
+		if err != nil {
+			t.Logf("transfer B->A error: %v", err)
+		}
+	}()
+
+	wg.Wait()
+
+	db.First(&a, a.ID)
+	db.First(&b, b.ID)
+
+	total := a.Balance.Add(b.Balance)
+
+	expected := decimal.NewFromInt(200)
+
+	if !total.Equal(expected) {
+		t.Fatalf(
+			"system money invariant broken: expected %s got %s",
+			expected.String(),
+			total.String(),
+		)
+	}
+}
+
+func TestPayment_Concurrent(t *testing.T) {
+	db, svc := setupTestDB(t)
+	ctx := context.Background()
+
+	wallet := entity.Wallet{
+		OwnerID:  "user1",
+		Currency: "USD",
+		Status:   "ACTIVE",
+		Balance:  decimal.NewFromInt(50),
+	}
+
+	if err := db.Create(&wallet).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	const goroutines = 10
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	for i := 0; i < goroutines; i++ {
+
+		go func(i int) {
+			defer wg.Done()
+
+			_, err := svc.Payment(ctx, &model.PaymentWalletRequest{
+				ID:             wallet.ID,
+				OwnerID:        "user1",
+				Currency:       "USD",
+				IdempotencyKey: fmt.Sprintf("pay-race-%d", i),
+				Amount:         "10.00",
+			})
+
+			if err != nil {
+				t.Logf("payment failed: %v", err)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	var updated entity.Wallet
+	db.First(&updated, wallet.ID)
+
+	if updated.Balance.LessThan(decimal.Zero) {
+		t.Fatalf("wallet balance became negative: %s", updated.Balance.String())
+	}
+}
