@@ -73,14 +73,15 @@ func (h *WalletHandler) TopUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Service.TopUp(r.Context(), req); err != nil {
+	wallet, err := h.Service.TopUp(r.Context(), req)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"success"}`))
+	json.NewEncoder(w).Encode(wallet)
 }
 
 func (h *WalletHandler) Payment(w http.ResponseWriter, r *http.Request) {

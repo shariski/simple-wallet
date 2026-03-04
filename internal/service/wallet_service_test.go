@@ -107,7 +107,7 @@ func TestTopUp_Success(t *testing.T) {
 		Amount:         "10.00",
 	}
 
-	err := svc.TopUp(context.Background(), req)
+	res, err := svc.TopUp(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -116,6 +116,10 @@ func TestTopUp_Success(t *testing.T) {
 	db.First(&updated, wallet.ID)
 
 	if updated.Balance.String() != "10" && updated.Balance.String() != "10.00" {
+		t.Fatalf("unexpected balance %s", updated.Balance.String())
+	}
+
+	if res.Balance.String() != "10" && res.Balance.String() != "10.00" {
 		t.Fatalf("unexpected balance %s", updated.Balance.String())
 	}
 }
@@ -137,12 +141,12 @@ func TestTopUp_Idempotency(t *testing.T) {
 		Amount:         "10.00",
 	}
 
-	err := svc.TopUp(context.Background(), req)
+	res, err := svc.TopUp(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	err = svc.TopUp(context.Background(), req)
+	_, err = svc.TopUp(context.Background(), req)
 	if err == nil {
 		t.Fatalf("expected idempotency duplicate error")
 	}
@@ -151,6 +155,10 @@ func TestTopUp_Idempotency(t *testing.T) {
 	db.First(&updated, wallet.ID)
 
 	if updated.Balance.String() != "10" && updated.Balance.String() != "10.00" {
+		t.Fatalf("balance changed unexpectedly: %s", updated.Balance.String())
+	}
+
+	if res.Balance.String() != "10" && res.Balance.String() != "10.00" {
 		t.Fatalf("balance changed unexpectedly: %s", updated.Balance.String())
 	}
 }
@@ -291,7 +299,7 @@ func TestLedgerInvariant(t *testing.T) {
 	}
 
 	// topup sender
-	err := svc.TopUp(ctx, &model.TopupWalletRequest{
+	_, err := svc.TopUp(ctx, &model.TopupWalletRequest{
 		ID:             sender.ID,
 		IdempotencyKey: "topup1",
 		Amount:         "100.00",
@@ -496,7 +504,7 @@ func TestTopUp_SuspendedWallet(t *testing.T) {
 
 	db.Create(&wallet)
 
-	err := svc.TopUp(context.Background(), &model.TopupWalletRequest{
+	_, err := svc.TopUp(context.Background(), &model.TopupWalletRequest{
 		ID:             wallet.ID,
 		IdempotencyKey: "key1",
 		Amount:         "10.00",
@@ -731,7 +739,7 @@ func TestRandomOperations_LedgerInvariant(t *testing.T) {
 
 		case 0:
 			// topup wallet1
-			err := svc.TopUp(ctx, &model.TopupWalletRequest{
+			_, err := svc.TopUp(ctx, &model.TopupWalletRequest{
 				ID:             wallet1.ID,
 				IdempotencyKey: fmt.Sprintf("topup-%d", i),
 				Amount:         "10.00",
@@ -815,7 +823,7 @@ func TestTopUp_WalletNotFound(t *testing.T) {
 		Amount:         "10.00",
 	}
 
-	err := svc.TopUp(context.Background(), req)
+	_, err := svc.TopUp(context.Background(), req)
 
 	if err == nil {
 		t.Fatal("expected wallet not found error")
@@ -890,5 +898,151 @@ func TestStatus(t *testing.T) {
 
 	if res.ID != wallet.ID {
 		t.Fatal("wallet mismatch")
+	}
+}
+
+func TestLargeBalanceOperations(t *testing.T) {
+	db, svc := setupTestDB(t)
+
+	ctx := context.Background()
+
+	wallet := entity.Wallet{
+		OwnerID:  "biguser",
+		Currency: "USD",
+		Status:   "ACTIVE",
+	}
+
+	if err := db.Create(&wallet).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	largeAmount := "1000000000.00"
+
+	// large topup
+	_, err := svc.TopUp(ctx, &model.TopupWalletRequest{
+		ID:             wallet.ID,
+		IdempotencyKey: "large-topup",
+		Amount:         largeAmount,
+	})
+
+	if err != nil {
+		t.Fatalf("large topup failed: %v", err)
+	}
+
+	// payment
+	_, err = svc.Payment(ctx, &model.PaymentWalletRequest{
+		ID:             wallet.ID,
+		OwnerID:        "biguser",
+		Currency:       "USD",
+		IdempotencyKey: "large-payment",
+		Amount:         "250000000.00",
+	})
+
+	if err != nil {
+		t.Fatalf("large payment failed: %v", err)
+	}
+
+	// reload wallet
+	var updated entity.Wallet
+	if err := db.First(&updated, wallet.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	expected := decimal.NewFromInt(1000000000).Sub(decimal.NewFromInt(250000000))
+
+	if !updated.Balance.Equal(expected) {
+		t.Fatalf(
+			"unexpected balance: expected %s got %s",
+			expected.String(),
+			updated.Balance.String(),
+		)
+	}
+
+	// verify ledger invariant
+	var sum decimal.Decimal
+
+	err = db.Model(&entity.LedgerEntry{}).
+		Where("wallet_id = ?", wallet.ID).
+		Select("COALESCE(SUM(amount),0)").
+		Scan(&sum).Error
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !sum.Equal(updated.Balance) {
+		t.Fatalf(
+			"ledger invariant broken: balance=%s ledger_sum=%s",
+			updated.Balance.String(),
+			sum.String(),
+		)
+	}
+}
+
+func TestOutOfOrderRequests(t *testing.T) {
+	db, svc := setupTestDB(t)
+
+	ctx := context.Background()
+
+	wallet := entity.Wallet{
+		OwnerID:  "user1",
+		Currency: "USD",
+		Status:   "ACTIVE",
+	}
+
+	if err := db.Create(&wallet).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// payment first (should fail)
+	_, err := svc.Payment(ctx, &model.PaymentWalletRequest{
+		ID:             wallet.ID,
+		OwnerID:        "user1",
+		Currency:       "USD",
+		IdempotencyKey: "payment-first",
+		Amount:         "50.00",
+	})
+
+	if err == nil {
+		t.Fatal("expected insufficient balance error")
+	}
+
+	// topup later
+	_, err = svc.TopUp(ctx, &model.TopupWalletRequest{
+		ID:             wallet.ID,
+		IdempotencyKey: "topup-later",
+		Amount:         "100.00",
+	})
+
+	if err != nil {
+		t.Fatalf("topup failed: %v", err)
+	}
+
+	// payment retry
+	_, err = svc.Payment(ctx, &model.PaymentWalletRequest{
+		ID:             wallet.ID,
+		OwnerID:        "user1",
+		Currency:       "USD",
+		IdempotencyKey: "payment-retry",
+		Amount:         "50.00",
+	})
+
+	if err != nil {
+		t.Fatalf("payment retry failed: %v", err)
+	}
+
+	var updated entity.Wallet
+	if err := db.First(&updated, wallet.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	expected := decimal.NewFromInt(50)
+
+	if !updated.Balance.Equal(expected) {
+		t.Fatalf(
+			"unexpected balance: expected %s got %s",
+			expected.String(),
+			updated.Balance.String(),
+		)
 	}
 }

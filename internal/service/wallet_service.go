@@ -63,10 +63,10 @@ func (s *WalletService) Create(ctx context.Context, req *model.CreateWalletReque
 	return model.WalletToResponse(wallet), nil
 }
 
-func (s *WalletService) TopUp(ctx context.Context, req *model.TopupWalletRequest) error {
+func (s *WalletService) TopUp(ctx context.Context, req *model.TopupWalletRequest) (*model.WalletResponse, error) {
 	amount, err := NormalizeAmount(req.Amount)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	tx := s.db.WithContext(ctx).Begin()
@@ -80,11 +80,11 @@ func (s *WalletService) TopUp(ctx context.Context, req *model.TopupWalletRequest
 	})
 
 	if idempotencyResult.Error != nil {
-		return idempotencyResult.Error
+		return nil, idempotencyResult.Error
 	}
 
 	if idempotencyResult.RowsAffected == 0 {
-		return errors.New("duplicate request")
+		return nil, errors.New("duplicate request")
 	}
 
 	var wallet entity.Wallet
@@ -93,17 +93,17 @@ func (s *WalletService) TopUp(ctx context.Context, req *model.TopupWalletRequest
 	if err := tx.
 		Clauses(clause.Locking{Strength: "UPDATE"}).
 		First(&wallet, "id = ?", req.ID).Error; err != nil {
-		return err
+		return nil, err
 	}
 
 	if wallet.Status != "ACTIVE" {
-		return errors.New("wallet suspended")
+		return nil, errors.New("wallet suspended")
 	}
 
 	wallet.Balance = wallet.Balance.Add(amount)
 
 	if err := tx.Save(&wallet).Error; err != nil {
-		return err
+		return nil, err
 	}
 
 	entry := entity.LedgerEntry{
@@ -114,14 +114,14 @@ func (s *WalletService) TopUp(ctx context.Context, req *model.TopupWalletRequest
 	}
 
 	if err := tx.Create(&entry).Error; err != nil {
-		return err
+		return nil, err
 	}
 
 	if err := tx.Commit().Error; err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return model.WalletToResponse(&wallet), nil
 }
 
 func (s *WalletService) Payment(ctx context.Context, req *model.PaymentWalletRequest) (*model.WalletResponse, error) {
