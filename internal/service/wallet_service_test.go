@@ -103,6 +103,8 @@ func TestTopUp_Success(t *testing.T) {
 
 	req := &model.TopupWalletRequest{
 		ID:             wallet.ID,
+		OwnerID:        wallet.OwnerID,
+		Currency:       wallet.Currency,
 		IdempotencyKey: "key1",
 		Amount:         "10.00",
 	}
@@ -137,6 +139,8 @@ func TestTopUp_Idempotency(t *testing.T) {
 
 	req := &model.TopupWalletRequest{
 		ID:             wallet.ID,
+		OwnerID:        wallet.OwnerID,
+		Currency:       wallet.Currency,
 		IdempotencyKey: "same-key",
 		Amount:         "10.00",
 	}
@@ -301,6 +305,8 @@ func TestLedgerInvariant(t *testing.T) {
 	// topup sender
 	_, err := svc.TopUp(ctx, &model.TopupWalletRequest{
 		ID:             sender.ID,
+		OwnerID:        sender.OwnerID,
+		Currency:       sender.Currency,
 		IdempotencyKey: "topup1",
 		Amount:         "100.00",
 	})
@@ -506,6 +512,8 @@ func TestTopUp_SuspendedWallet(t *testing.T) {
 
 	_, err := svc.TopUp(context.Background(), &model.TopupWalletRequest{
 		ID:             wallet.ID,
+		OwnerID:        wallet.OwnerID,
+		Currency:       wallet.Currency,
 		IdempotencyKey: "key1",
 		Amount:         "10.00",
 	})
@@ -741,6 +749,8 @@ func TestRandomOperations_LedgerInvariant(t *testing.T) {
 			// topup wallet1
 			_, err := svc.TopUp(ctx, &model.TopupWalletRequest{
 				ID:             wallet1.ID,
+				OwnerID:        wallet1.OwnerID,
+				Currency:       wallet1.Currency,
 				IdempotencyKey: fmt.Sprintf("topup-%d", i),
 				Amount:         "10.00",
 			})
@@ -921,6 +931,8 @@ func TestLargeBalanceOperations(t *testing.T) {
 	// large topup
 	_, err := svc.TopUp(ctx, &model.TopupWalletRequest{
 		ID:             wallet.ID,
+		OwnerID:        wallet.OwnerID,
+		Currency:       wallet.Currency,
 		IdempotencyKey: "large-topup",
 		Amount:         largeAmount,
 	})
@@ -1010,6 +1022,8 @@ func TestOutOfOrderRequests(t *testing.T) {
 	// topup later
 	_, err = svc.TopUp(ctx, &model.TopupWalletRequest{
 		ID:             wallet.ID,
+		OwnerID:        wallet.OwnerID,
+		Currency:       wallet.Currency,
 		IdempotencyKey: "topup-later",
 		Amount:         "100.00",
 	})
@@ -1044,5 +1058,84 @@ func TestOutOfOrderRequests(t *testing.T) {
 			expected.String(),
 			updated.Balance.String(),
 		)
+	}
+}
+
+func TestTopUp_OwnerMismatch(t *testing.T) {
+	db, svc := setupTestDB(t)
+
+	ctx := context.Background()
+
+	// wallet belongs to user1
+	wallet := entity.Wallet{
+		OwnerID:  "user1",
+		Currency: "USD",
+		Status:   "ACTIVE",
+	}
+
+	if err := db.Create(&wallet).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// attacker tries to use user2
+	req := &model.TopupWalletRequest{
+		ID:             wallet.ID,
+		OwnerID:        "user2",
+		Currency:       "USD",
+		IdempotencyKey: "attack-topup",
+		Amount:         "100.00",
+	}
+
+	_, err := svc.TopUp(ctx, req)
+
+	if err == nil {
+		t.Fatal("expected owner mismatch error")
+	}
+
+	// ensure balance unchanged
+	var updated entity.Wallet
+	db.First(&updated, wallet.ID)
+
+	if !updated.Balance.Equal(decimal.Zero) {
+		t.Fatalf("wallet balance changed unexpectedly: %s", updated.Balance)
+	}
+}
+
+func TestPayment_OwnerMismatch(t *testing.T) {
+	db, svc := setupTestDB(t)
+
+	ctx := context.Background()
+
+	wallet := entity.Wallet{
+		OwnerID:  "user1",
+		Currency: "USD",
+		Status:   "ACTIVE",
+		Balance:  decimal.NewFromInt(100),
+	}
+
+	if err := db.Create(&wallet).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	req := &model.PaymentWalletRequest{
+		ID:             wallet.ID,
+		OwnerID:        "user2", // malicious user
+		Currency:       "USD",
+		IdempotencyKey: "attack-payment",
+		Amount:         "10.00",
+	}
+
+	_, err := svc.Payment(ctx, req)
+
+	if err == nil {
+		t.Fatal("expected owner mismatch error")
+	}
+
+	// balance must stay same
+	var updated entity.Wallet
+	db.First(&updated, wallet.ID)
+
+	if !updated.Balance.Equal(decimal.NewFromInt(100)) {
+		t.Fatalf("wallet balance changed unexpectedly: %s", updated.Balance)
 	}
 }

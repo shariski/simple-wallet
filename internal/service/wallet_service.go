@@ -92,7 +92,9 @@ func (s *WalletService) TopUp(ctx context.Context, req *model.TopupWalletRequest
 	// Concurrency-safe row lock
 	if err := tx.
 		Clauses(clause.Locking{Strength: "UPDATE"}).
-		First(&wallet, "id = ?", req.ID).Error; err != nil {
+		Where("id = ? AND owner_id = ? AND currency = ?",
+			req.ID, req.OwnerID, req.Currency).
+		First(&wallet).Error; err != nil {
 		return nil, err
 	}
 
